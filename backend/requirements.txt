@@ -1,0 +1,6 @@
+# Python 3.11+
+# Dev: uvicorn app.main:app --reload
+# Prod: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+pydantic-settings>=2.6.0
