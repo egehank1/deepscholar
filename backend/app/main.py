@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
 from app.api.health import router as health_router
+from app.api.upload import router as upload_router
 from app.core.config import settings
 
 
@@ -36,6 +37,7 @@ def create_application() -> FastAPI:
     )
     application.add_middleware(CORSMiddleware, **_cors_middleware_kwargs())
     application.include_router(health_router)
+    application.include_router(upload_router)
     application.include_router(api_router, prefix="/api")
     return application
 
