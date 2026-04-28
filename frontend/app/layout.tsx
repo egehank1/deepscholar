@@ -3,6 +3,10 @@ import { Inter } from "next/font/google";
 import { AppShell } from "@/components/AppShell";
 import "./globals.css";
 
+/* This is the root layout — a special Next.js file that wraps every single page 
+in your app. It's like the outer shell that never changes while the content inside swaps out as you navigate.
+*/
+
 const inter = Inter({
   subsets: ["latin"],
   variable: "--font-sans",
