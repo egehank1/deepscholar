@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-large"
     OPENAI_EMBEDDING_BATCH_SIZE: int = 100  # max items per API call
 
+    # Supabase / pgvector
+    # Format: postgresql://postgres:[PASSWORD]@db.[PROJECT_REF].supabase.co:5432/postgres
+    SUPABASE_DB_URL: str = ""
+    VECTOR_DIMENSIONS: int = 3072  # text-embedding-3-large output size
+
 
 
     @property
