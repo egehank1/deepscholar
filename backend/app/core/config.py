@@ -34,6 +34,10 @@ class Settings(BaseSettings):
 
     UPLOAD_DIR: Path = Path("/data/uploads")
 
+    OPENAI_API_KEY: str = ""
+    OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-large"
+    OPENAI_EMBEDDING_BATCH_SIZE: int = 100  # max items per API call
+
 
 
     @property
