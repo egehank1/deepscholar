@@ -6,6 +6,20 @@ from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
 from app.core.config import settings
+from app.services.pdf_parser import PDFParseResult, extract_text
+
+'''
+The most complex file right now. Handles POST /upload:
+
+Accepts one or more files via a form upload
+Validates each file:
+Must have .pdf extension
+Must have the right content type
+Must start with the bytes %PDF (the actual PDF magic bytes — even if someone renames a .txt file to .pdf, this catches it)
+Saves each file to UPLOAD_DIR with a unique name
+Returns the saved filenames and a count
+'''
+
 
 router = APIRouter(tags=["upload"])
 
@@ -19,8 +33,17 @@ _ALLOWED_CONTENT_TYPES = frozenset(
 )
 
 
+_PREVIEW_CHARS = 1000
+
+
+class FileResult(BaseModel):
+    filename: str = Field(description="Basename as stored on disk")
+    pages: int
+    preview: str = Field(description="First 1 000 characters of extracted text")
+
+
 class UploadResponse(BaseModel):
-    filenames: list[str] = Field(description="Basenames as stored on disk")
+    files: list[FileResult]
     count: int
 
 
@@ -63,7 +86,8 @@ def _unique_destination(dest_dir: Path, original_name: str) -> Path:
         n += 1
 
 
-async def _save_one(upload: UploadFile, dest_dir: Path) -> str:
+async def _save_one(upload: UploadFile, dest_dir: Path) -> tuple[Path, str]:
+    """Save a validated PDF and return (absolute path, stored basename)."""
     try:
         _validate_pdf_metadata(upload)
 
@@ -77,9 +101,17 @@ async def _save_one(upload: UploadFile, dest_dir: Path) -> str:
         with dest.open("wb") as out:
             shutil.copyfileobj(upload.file, out)
 
-        return dest.name
+        return dest, dest.name
     finally:
         await upload.close()
+
+
+def _parse_or_warn(dest: Path) -> PDFParseResult:
+    """Extract text, returning empty result on failure (never crash the upload)."""
+    try:
+        return extract_text(dest)
+    except Exception:
+        return PDFParseResult(text="", pages=0)
 
 
 @router.post("/upload", response_model=UploadResponse)
@@ -91,11 +123,23 @@ async def upload_pdfs(
 ) -> UploadResponse:
     """
     Accept multiple PDF uploads (multipart form field `files`, repeated).
+
+    Each entry in the response includes:
+    - ``filename``  – name as stored on disk
+    - ``pages``     – total page count
+    - ``preview``   – first 1 000 characters of extracted text
     """
     dest_dir = _ensure_upload_dir()
-    saved: list[str] = []
+    results: list[FileResult] = []
     for f in files:
-        name = await _save_one(f, dest_dir)
-        saved.append(name)
+        dest, name = await _save_one(f, dest_dir)
+        parsed = _parse_or_warn(dest)
+        results.append(
+            FileResult(
+                filename=name,
+                pages=parsed["pages"],
+                preview=parsed["text"][:_PREVIEW_CHARS],
+            )
+        )
 
-    return UploadResponse(filenames=saved, count=len(saved))
+    return UploadResponse(files=results, count=len(results))
