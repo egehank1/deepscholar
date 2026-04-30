@@ -111,6 +111,29 @@ def _embed_batch(texts: list[str]) -> list[list[float]]:
 # Public API
 # ---------------------------------------------------------------------------
 
+// It takes user input (text) and converts it into a vector of numbers that represents the semantic meaning of that text.
+
+def embed_query(text: str) -> list[float]:
+    """
+    Embed a single query string and return its float vector.
+
+    Uses the same model as ``embed_chunks`` so similarity scores are comparable.
+
+    Parameters
+    ----------
+    text:
+        The user's query string.
+
+    Returns
+    -------
+    list[float]
+        Float vector with ``settings.VECTOR_DIMENSIONS`` dimensions.
+    """
+    if not text or not text.strip():
+        raise ValueError("Query text must not be empty.")
+    return _embed_batch([text])[0]
+
+
 def embed_chunks(chunks: list[Chunk]) -> list[EmbeddedChunk]:
     """
     Generate embeddings for a list of text chunks.
