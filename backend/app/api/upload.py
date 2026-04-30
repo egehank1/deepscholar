@@ -1,3 +1,17 @@
+"""POST /upload — PDF ingest endpoint.
+
+Full pipeline per file
+----------------------
+1. Validate & save the PDF to disk.
+2. Extract plain text with PyMuPDF.
+3. Split into overlapping sentence-aware chunks.
+4. Embed every chunk via OpenAI (text-embedding-3-large).
+5. Persist chunks + embeddings to pgvector (Supabase).
+
+After a successful upload every chunk is immediately searchable by POST /chat.
+"""
+
+import asyncio
 import shutil
 from pathlib import Path
 from typing import Annotated
@@ -6,19 +20,10 @@ from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
 from app.core.config import settings
+from app.services.chunking import chunk_text
+from app.services.embeddings import embed_chunks
 from app.services.pdf_parser import PDFParseResult, extract_text
-
-'''
-The most complex file right now. Handles POST /upload:
-
-Accepts one or more files via a form upload
-Validates each file:
-Must have .pdf extension
-Must have the right content type
-Must start with the bytes %PDF (the actual PDF magic bytes — even if someone renames a .txt file to .pdf, this catches it)
-Saves each file to UPLOAD_DIR with a unique name
-Returns the saved filenames and a count
-'''
+from app.services.vector_store import store_chunks
 
 
 router = APIRouter(tags=["upload"])
@@ -32,20 +37,30 @@ _ALLOWED_CONTENT_TYPES = frozenset(
     }
 )
 
-
 _PREVIEW_CHARS = 1000
 
+
+# ---------------------------------------------------------------------------
+# Response models
+# ---------------------------------------------------------------------------
 
 class FileResult(BaseModel):
     filename: str = Field(description="Basename as stored on disk")
     pages: int
     preview: str = Field(description="First 1 000 characters of extracted text")
+    chunks_stored: int = Field(
+        description="Number of chunks embedded and saved to the vector store"
+    )
 
 
 class UploadResponse(BaseModel):
     files: list[FileResult]
     count: int
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _ensure_upload_dir() -> Path:
     root = Path(settings.UPLOAD_DIR)
@@ -114,6 +129,31 @@ def _parse_or_warn(dest: Path) -> PDFParseResult:
         return PDFParseResult(text="", pages=0)
 
 
+def _run_ingest_pipeline(text: str, filename: str) -> int:
+    """
+    Synchronous RAG ingest: chunk → embed → store.
+
+    Returns the number of chunks persisted.
+    Raises RuntimeError / openai.OpenAIError / psycopg2.Error on failure.
+    """
+    chunks = chunk_text(text)
+    if not chunks:
+        return 0
+
+    embedded = embed_chunks(chunks)
+
+    # Tag every chunk with the source filename so /chat citations are human-readable.
+    for ec in embedded:
+        ec["metadata"]["source"] = filename
+
+    ids = store_chunks(embedded)
+    return len(ids)
+
+
+# ---------------------------------------------------------------------------
+# Route
+# ---------------------------------------------------------------------------
+
 @router.post("/upload", response_model=UploadResponse)
 async def upload_pdfs(
     files: Annotated[
@@ -122,23 +162,52 @@ async def upload_pdfs(
     ],
 ) -> UploadResponse:
     """
-    Accept multiple PDF uploads (multipart form field `files`, repeated).
+    Accept one or more PDF uploads, extract text, embed every chunk with
+    ``text-embedding-3-large``, and persist them to the pgvector store.
+
+    After a successful call the uploaded content is immediately searchable
+    via **POST /chat**.
 
     Each entry in the response includes:
-    - ``filename``  – name as stored on disk
-    - ``pages``     – total page count
-    - ``preview``   – first 1 000 characters of extracted text
+    - ``filename``       – name as stored on disk
+    - ``pages``          – total page count
+    - ``preview``        – first 1 000 characters of extracted text
+    - ``chunks_stored``  – number of chunks saved to the vector store
     """
     dest_dir = _ensure_upload_dir()
     results: list[FileResult] = []
+
     for f in files:
+        # 1. Save PDF to disk
         dest, name = await _save_one(f, dest_dir)
+
+        # 2. Extract text
         parsed = _parse_or_warn(dest)
+
+        # 3-5. Chunk → embed → store  (blocking I/O → thread pool)
+        chunks_stored = 0
+        if parsed["text"].strip():
+            try:
+                chunks_stored = await asyncio.to_thread(
+                    _run_ingest_pipeline, parsed["text"], name
+                )
+            except RuntimeError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=str(exc),
+                ) from exc
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Ingest pipeline failed for {name!r}: {exc}",
+                ) from exc
+
         results.append(
             FileResult(
                 filename=name,
                 pages=parsed["pages"],
                 preview=parsed["text"][:_PREVIEW_CHARS],
+                chunks_stored=chunks_stored,
             )
         )
 

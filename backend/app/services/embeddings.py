@@ -111,7 +111,7 @@ def _embed_batch(texts: list[str]) -> list[list[float]]:
 # Public API
 # ---------------------------------------------------------------------------
 
-// It takes user input (text) and converts it into a vector of numbers that represents the semantic meaning of that text.
+# It takes user input (text) and converts it into a vector of numbers that represents the semantic meaning of that text.
 
 def embed_query(text: str) -> list[float]:
     """
