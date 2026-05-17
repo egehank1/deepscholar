@@ -23,7 +23,7 @@ from app.core.config import settings
 from app.services.chunking import chunk_text
 from app.services.embeddings import embed_chunks
 from app.services.pdf_parser import PDFParseResult, extract_text
-from app.services.vector_store import store_chunks
+from app.services.vector_store import delete_by_source, store_chunks
 
 
 router = APIRouter(tags=["upload"])
@@ -129,22 +129,30 @@ def _parse_or_warn(dest: Path) -> PDFParseResult:
         return PDFParseResult(text="", pages=0)
 
 
-def _run_ingest_pipeline(text: str, filename: str) -> int:
+def _run_ingest_pipeline(text: str, source_name: str) -> int:
     """
-    Synchronous RAG ingest: chunk → embed → store.
+    Synchronous RAG ingest: delete-old → chunk → embed → store.
+
+    *source_name* is always the **original** filename supplied by the user (not
+    any renamed disk copy).  Deleting by source first means re-uploading the
+    same PDF replaces its old data instead of creating a duplicate.
 
     Returns the number of chunks persisted.
     Raises RuntimeError / openai.OpenAIError / psycopg2.Error on failure.
     """
+    # Remove any previously ingested chunks for this source so re-uploads
+    # don't accumulate duplicate data in the vector store.
+    delete_by_source(source_name)
+
     chunks = chunk_text(text)
     if not chunks:
         return 0
 
     embedded = embed_chunks(chunks)
 
-    # Tag every chunk with the source filename so /chat citations are human-readable.
+    # Tag every chunk with the original source name so citations are human-readable.
     for ec in embedded:
-        ec["metadata"]["source"] = filename
+        ec["metadata"]["source"] = source_name
 
     ids = store_chunks(embedded)
     return len(ids)
@@ -178,8 +186,13 @@ async def upload_pdfs(
     results: list[FileResult] = []
 
     for f in files:
-        # 1. Save PDF to disk
-        dest, name = await _save_one(f, dest_dir)
+        # Preserve the original filename as the canonical source key.
+        original_name = Path(f.filename or "document.pdf").name
+        if not original_name.lower().endswith(".pdf"):
+            original_name = f"{original_name}.pdf"
+
+        # 1. Save PDF to disk (may be renamed to avoid collisions, e.g. messi_1.pdf)
+        dest, _disk_name = await _save_one(f, dest_dir)
 
         # 2. Extract text
         parsed = _parse_or_warn(dest)
@@ -189,7 +202,7 @@ async def upload_pdfs(
         if parsed["text"].strip():
             try:
                 chunks_stored = await asyncio.to_thread(
-                    _run_ingest_pipeline, parsed["text"], name
+                    _run_ingest_pipeline, parsed["text"], original_name
                 )
             except RuntimeError as exc:
                 raise HTTPException(
@@ -199,12 +212,12 @@ async def upload_pdfs(
             except Exception as exc:
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=f"Ingest pipeline failed for {name!r}: {exc}",
+                    detail=f"Ingest pipeline failed for {original_name!r}: {exc}",
                 ) from exc
 
         results.append(
             FileResult(
-                filename=name,
+                filename=original_name,
                 pages=parsed["pages"],
                 preview=parsed["text"][:_PREVIEW_CHARS],
                 chunks_stored=chunks_stored,

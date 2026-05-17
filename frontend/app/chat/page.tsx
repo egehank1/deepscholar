@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { askQuestion, type Citation } from "@/lib/api";
+import { useDocuments } from "@/context/DocumentsContext";
 
 interface UserMessage {
   role: "user";
@@ -17,6 +18,7 @@ interface AssistantMessage {
 type Message = UserMessage | AssistantMessage;
 
 export default function ChatPage() {
+  const { documents } = useDocuments();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -70,9 +72,17 @@ export default function ChatPage() {
             responses.
           </p>
         </div>
-        <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300">
-          <span className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden />
-          Insights Engine online
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300">
+            <span className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden />
+            Insights Engine online
+          </div>
+          {documents.length > 0 && (
+            <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300">
+              <span className="h-2 w-2 rounded-full bg-[var(--accent)]" aria-hidden />
+              {documents.length} paper{documents.length > 1 ? "s" : ""} indexed
+            </div>
+          )}
         </div>
       </div>
 
@@ -82,11 +92,12 @@ export default function ChatPage() {
           {messages.length === 0 && !loading && (
             <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
               <div className="rounded-full bg-[var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[var(--accent)]">
-                Research session ready
+                {documents.length > 0 ? "Research session ready" : "No papers indexed yet"}
               </div>
               <p className="max-w-sm text-sm text-slate-500 dark:text-slate-400">
-                Start by asking about methodology, findings, limitations, or key
-                comparisons across your uploaded papers.
+                {documents.length > 0
+                  ? `${documents.length} paper${documents.length > 1 ? "s" : ""} ready. Ask about methodology, findings, limitations, or key comparisons.`
+                  : "Upload PDF papers in the Upload Literature section first, then return here to ask questions."}
               </p>
             </div>
           )}

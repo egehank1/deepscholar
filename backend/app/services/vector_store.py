@@ -138,6 +138,35 @@ def store_chunks(chunks: list[EmbeddedChunk]) -> list[str]:
     return ids
 
 
+def delete_by_source(source: str) -> int:
+    """
+    Delete all chunks whose ``metadata->>'source'`` matches *source*.
+
+    Returns the number of rows deleted.  Call this before re-ingesting a file
+    so that uploading the same PDF twice replaces rather than duplicates data.
+
+    Raises
+    ------
+    RuntimeError
+        If ``SUPABASE_DB_URL`` is not configured.
+    psycopg2.Error
+        Propagated on any database error; the transaction is rolled back.
+    """
+    conn = _get_conn()
+    try:
+        with _cursor() as cur:
+            cur.execute(
+                "DELETE FROM documents WHERE metadata->>'source' = %s",
+                (source,),
+            )
+            deleted = cur.rowcount
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return deleted
+
+
 def search_similar(
     query_embedding: list[float],
     top_k: int = 5,

@@ -133,6 +133,7 @@ def _parse_response(raw: str, chunks: list[SearchResult]) -> GroundedAnswer:
     raw_citations: list[dict] = data.get("citations", [])
 
     citations: list[Citation] = []
+    seen_citations: set[tuple[str, str]] = set()
     for c in raw_citations:
         text = c.get("text", "")
         source = c.get("source", "")
@@ -145,7 +146,10 @@ def _parse_response(raw: str, chunks: list[SearchResult]) -> GroundedAnswer:
                 source = chunk.get("metadata", {}).get("source", chunk["id"])
 
         if text or source:
-            citations.append(Citation(text=text, source=source))
+            key = (text.strip().lower(), source)
+            if key not in seen_citations:
+                seen_citations.add(key)
+                citations.append(Citation(text=text, source=source))
 
     return GroundedAnswer(answer=answer_text, citations=citations)
 
