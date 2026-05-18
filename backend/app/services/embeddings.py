@@ -20,6 +20,14 @@ from typing import Any, TypedDict
 from app.core.config import settings
 from app.services.chunking import Chunk
 
+# Import openai at module level so Python's import-lock is only acquired once
+# on the main thread.  Lazy per-thread imports cause _ModuleLock deadlocks in
+# Python 3.14 when multiple threads call _get_client() simultaneously.
+try:
+    import openai as _openai_module
+except ModuleNotFoundError:
+    _openai_module = None  # type: ignore[assignment]
+
 
 '''
 INPUT
@@ -84,14 +92,12 @@ def _get_client() -> Any:
             "Add it to your .env file or export it as an environment variable."
         )
 
-    try:
-        import openai  # noqa: PLC0415 — intentional lazy import
-    except ModuleNotFoundError as exc:
+    if _openai_module is None:
         raise RuntimeError(
             "The 'openai' package is not installed. Run: pip install openai>=1.30.0"
-        ) from exc
+        )
 
-    _client = openai.OpenAI(api_key=api_key)
+    _client = _openai_module.OpenAI(api_key=api_key)
     return _client
 
 

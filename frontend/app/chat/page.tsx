@@ -1,34 +1,24 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { askQuestion, type Citation } from "@/lib/api";
-import { useDocuments } from "@/context/DocumentsContext";
-
-interface UserMessage {
-  role: "user";
-  text: string;
-}
-
-interface AssistantMessage {
-  role: "assistant";
-  text: string;
-  citations: Citation[];
-}
-
-type Message = UserMessage | AssistantMessage;
+import { useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import { askQuestion } from "@/lib/api";
+import { useResearchStore, type ChatMessage } from "@/store/useResearchStore";
 
 export default function ChatPage() {
-  const { documents } = useDocuments();
-  const [messages, setMessages] = useState<Message[]>([]);
+  const uploadedDocuments = useResearchStore((s) => s.uploadedDocuments);
+  const chatHistory = useResearchStore((s) => s.chatHistory);
+  const addChatMessage = useResearchStore((s) => s.addChatMessage);
+  const clearChatHistory = useResearchStore((s) => s.clearChatHistory);
+
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
+  const scrollToBottom = () =>
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, loading]);
 
   const send = async () => {
     const question = input.trim();
@@ -36,19 +26,25 @@ export default function ChatPage() {
 
     setInput("");
     setError(null);
-    setMessages((prev) => [...prev, { role: "user", text: question }]);
+
+    const userMsg: ChatMessage = { role: "user", text: question };
+    addChatMessage(userMsg);
     setLoading(true);
+    scrollToBottom();
 
     try {
-      const res = await askQuestion(question);
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", text: res.answer, citations: res.citations },
-      ]);
+      const sources = uploadedDocuments.map((d) => d.filename);
+      const res = await askQuestion(question, sources);
+      addChatMessage({
+        role: "assistant",
+        text: res.answer,
+        citations: res.citations,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unexpected error");
     } finally {
       setLoading(false);
+      scrollToBottom();
       inputRef.current?.focus();
     }
   };
@@ -77,11 +73,20 @@ export default function ChatPage() {
             <span className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden />
             Insights Engine online
           </div>
-          {documents.length > 0 && (
+          {uploadedDocuments.length > 0 && (
             <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300">
               <span className="h-2 w-2 rounded-full bg-[var(--accent)]" aria-hidden />
-              {documents.length} paper{documents.length > 1 ? "s" : ""} indexed
+              {uploadedDocuments.length} paper{uploadedDocuments.length > 1 ? "s" : ""} indexed
             </div>
+          )}
+          {chatHistory.length > 0 && (
+            <button
+              type="button"
+              onClick={clearChatHistory}
+              className="text-xs text-slate-400 transition-colors hover:text-red-500"
+            >
+              Clear chat
+            </button>
           )}
         </div>
       </div>
@@ -89,21 +94,21 @@ export default function ChatPage() {
       <div className="flex flex-1 flex-col rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-sm">
         {/* Message list */}
         <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6">
-          {messages.length === 0 && !loading && (
+          {chatHistory.length === 0 && !loading && (
             <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
               <div className="rounded-full bg-[var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[var(--accent)]">
-                {documents.length > 0 ? "Research session ready" : "No papers indexed yet"}
+                {uploadedDocuments.length > 0 ? "Research session ready" : "No papers indexed yet"}
               </div>
               <p className="max-w-sm text-sm text-slate-500 dark:text-slate-400">
-                {documents.length > 0
-                  ? `${documents.length} paper${documents.length > 1 ? "s" : ""} ready. Ask about methodology, findings, limitations, or key comparisons.`
+                {uploadedDocuments.length > 0
+                  ? `${uploadedDocuments.length} paper${uploadedDocuments.length > 1 ? "s" : ""} ready. Ask about methodology, findings, limitations, or key comparisons.`
                   : "Upload PDF papers in the Upload Literature section first, then return here to ask questions."}
               </p>
             </div>
           )}
 
           <div className="space-y-6">
-            {messages.map((msg, i) =>
+            {chatHistory.map((msg, i) =>
               msg.role === "user" ? (
                 <div key={i} className="flex justify-end">
                   <div className="max-w-[75%] rounded-2xl rounded-br-md bg-slate-900 px-4 py-2.5 text-sm text-white dark:bg-slate-100 dark:text-slate-900">
@@ -113,7 +118,34 @@ export default function ChatPage() {
               ) : (
                 <div key={i} className="flex flex-col gap-2">
                   <div className="max-w-[85%] rounded-2xl rounded-bl-md border border-[var(--border)] bg-[var(--surface-subtle)] px-4 py-3 text-sm text-slate-800 dark:text-slate-100">
-                    <p className="whitespace-pre-wrap">{msg.text}</p>
+                    <ReactMarkdown
+                      components={{
+                        p: ({ children }) => (
+                          <p className="mb-3 last:mb-0 leading-relaxed">{children}</p>
+                        ),
+                        strong: ({ children }) => (
+                          <strong className="font-semibold text-slate-900 dark:text-slate-50">
+                            {children}
+                          </strong>
+                        ),
+                        ul: ({ children }) => (
+                          <ul className="mb-3 ml-4 list-disc space-y-1 last:mb-0">{children}</ul>
+                        ),
+                        ol: ({ children }) => (
+                          <ol className="mb-3 ml-4 list-decimal space-y-1 last:mb-0">{children}</ol>
+                        ),
+                        li: ({ children }) => (
+                          <li className="leading-relaxed">{children}</li>
+                        ),
+                        h3: ({ children }) => (
+                          <h3 className="mb-1 mt-3 font-semibold text-slate-900 first:mt-0 dark:text-slate-50">
+                            {children}
+                          </h3>
+                        ),
+                      }}
+                    >
+                      {msg.text}
+                    </ReactMarkdown>
                   </div>
                   {msg.citations.length > 0 && (
                     <details className="ml-1 max-w-[85%]">

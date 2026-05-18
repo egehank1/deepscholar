@@ -24,13 +24,28 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
   const [documents, setDocuments] = useState<FileResult[]>([]);
   const [hydrated, setHydrated] = useState(false);
 
-  // Rehydrate from localStorage on mount (client only)
+  // Rehydrate from localStorage on mount (client only).
+  // Normalise older entries that pre-date the extraction field.
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw) as FileResult[];
-        if (Array.isArray(parsed)) setDocuments(parsed);
+        if (Array.isArray(parsed)) {
+          const normalised = parsed.map((d) => ({
+            ...d,
+            extraction: d.extraction ?? {
+              title: null,
+              authors: [],
+              abstract: null,
+              methodology: null,
+              datasets: [],
+              metrics: [],
+              limitations: null,
+            },
+          }));
+          setDocuments(normalised);
+        }
       }
     } catch {
       // ignore corrupt storage

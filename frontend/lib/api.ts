@@ -3,11 +3,22 @@ const API_URL =
 
 // ── Upload ────────────────────────────────────────────────────────────────────
 
+export interface PaperExtraction {
+  title: string | null;
+  authors: string[];
+  abstract: string | null;
+  methodology: string | null;
+  datasets: string[];
+  metrics: string[];
+  limitations: string | null;
+}
+
 export interface FileResult {
   filename: string;
   pages: number;
   preview: string;
   chunks_stored: number;
+  extraction: PaperExtraction;
 }
 
 export interface UploadResponse {
@@ -81,6 +92,43 @@ export function uploadSinglePdf(
   });
 }
 
+// ── Knowledge Graph ───────────────────────────────────────────────────────────
+
+export type NodeType = "paper" | "method" | "dataset" | "task";
+export type EdgeRelation = "uses" | "evaluates_on" | "addresses" | "improves";
+
+export interface GraphNode {
+  id: string;
+  label: string;
+  type: NodeType;
+  meta: {
+    source?: string;
+    authors?: string[];
+    abstract?: string;
+    methodology?: string;
+  };
+}
+
+export interface GraphEdge {
+  source: string;
+  target: string;
+  relation: EdgeRelation;
+}
+
+export interface KnowledgeGraphData {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+export async function fetchKnowledgeGraph(): Promise<KnowledgeGraphData> {
+  const res = await fetch(`${API_URL}/api/knowledge-graph`);
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null);
+    throw new Error(detail?.detail ?? `Knowledge graph fetch failed (HTTP ${res.status})`);
+  }
+  return res.json() as Promise<KnowledgeGraphData>;
+}
+
 // ── Chat ──────────────────────────────────────────────────────────────────────
 
 export interface Citation {
@@ -93,11 +141,14 @@ export interface ChatResponse {
   citations: Citation[];
 }
 
-export async function askQuestion(question: string): Promise<ChatResponse> {
+export async function askQuestion(
+  question: string,
+  sources: string[] = [],
+): Promise<ChatResponse> {
   const res = await fetch(`${API_URL}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify({ question, sources }),
   });
 
   if (!res.ok) {
@@ -108,4 +159,81 @@ export async function askQuestion(question: string): Promise<ChatResponse> {
   }
 
   return res.json() as Promise<ChatResponse>;
+}
+
+// ── Evaluation / Analytics ────────────────────────────────────────────────────
+
+export interface EvalMetrics {
+  retrieval_precision: number | null;
+  citation_correctness: number | null;
+  answer_faithfulness: number | null;
+  overall_score: number | null;
+}
+
+export interface EvaluationLog {
+  id: string;
+  question: string;
+  answer: string;
+  citations: Citation[];
+  retrieval_stats: Record<string, unknown>;
+  retrieval_precision: number | null;
+  citation_correctness: number | null;
+  answer_faithfulness: number | null;
+  overall_score: number | null;
+  created_at: string;
+}
+
+export interface DailyTrend {
+  date: string;
+  queries: number;
+  avg_score: number | null;
+}
+
+export interface EvaluationAnalytics {
+  total_queries: number;
+  avg_retrieval_precision: number | null;
+  avg_citation_correctness: number | null;
+  avg_answer_faithfulness: number | null;
+  avg_overall_score: number | null;
+  first_query_at: string | null;
+  last_query_at: string | null;
+  daily_trend: DailyTrend[];
+}
+
+export interface EvaluationLogsResponse {
+  logs: EvaluationLog[];
+  limit: number;
+  offset: number;
+}
+
+export async function fetchEvaluationLogs(
+  limit = 50,
+  offset = 0,
+): Promise<EvaluationLogsResponse> {
+  const res = await fetch(
+    `${API_URL}/api/evaluation/logs?limit=${limit}&offset=${offset}`,
+  );
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null);
+    throw new Error(detail?.detail ?? `Evaluation logs fetch failed (HTTP ${res.status})`);
+  }
+  return res.json() as Promise<EvaluationLogsResponse>;
+}
+
+export async function fetchEvaluationAnalytics(): Promise<EvaluationAnalytics> {
+  const res = await fetch(`${API_URL}/api/evaluation/analytics`);
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null);
+    throw new Error(detail?.detail ?? `Analytics fetch failed (HTTP ${res.status})`);
+  }
+  return res.json() as Promise<EvaluationAnalytics>;
+}
+
+export async function clearEvaluationLogs(): Promise<{ deleted: number }> {
+  const res = await fetch(`${API_URL}/api/evaluation/logs`, { method: "DELETE" });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null);
+    throw new Error(detail?.detail ?? `Clear failed (HTTP ${res.status})`);
+  }
+  return res.json() as Promise<{ deleted: number }>;
 }

@@ -7,6 +7,9 @@ const links = [
   { href: "/", label: "Workspace" },
   { href: "/upload", label: "Upload Literature" },
   { href: "/chat", label: "Ask Your Papers" },
+  { href: "/compare", label: "Compare Papers" },
+  { href: "/graph", label: "Knowledge Graph" },
+  { href: "/analytics", label: "Analytics" },
 ] as const;
 
 export function Navbar() {

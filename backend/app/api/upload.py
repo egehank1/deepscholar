@@ -4,11 +4,13 @@ Full pipeline per file
 ----------------------
 1. Validate & save the PDF to disk.
 2. Extract plain text with PyMuPDF.
-3. Split into overlapping sentence-aware chunks.
-4. Embed every chunk via OpenAI (text-embedding-3-large).
-5. Persist chunks + embeddings to pgvector (Supabase).
+3. Run LLM-assisted structured extraction (title, authors, abstract, …).
+4. Split into overlapping sentence-aware chunks.
+5. Embed every chunk via OpenAI (text-embedding-3-large).
+6. Persist chunks + embeddings to pgvector (Supabase).
 
 After a successful upload every chunk is immediately searchable by POST /chat.
+The response includes a structured ``extraction`` field per file.
 """
 
 import asyncio
@@ -22,8 +24,9 @@ from pydantic import BaseModel, Field
 from app.core.config import settings
 from app.services.chunking import chunk_text
 from app.services.embeddings import embed_chunks
+from app.services.extraction import PaperExtraction, extract_paper_fields
 from app.services.pdf_parser import PDFParseResult, extract_text
-from app.services.vector_store import delete_by_source, store_chunks
+from app.services.vector_store import delete_by_source, store_chunks, store_extraction
 
 
 router = APIRouter(tags=["upload"])
@@ -50,6 +53,9 @@ class FileResult(BaseModel):
     preview: str = Field(description="First 1 000 characters of extracted text")
     chunks_stored: int = Field(
         description="Number of chunks embedded and saved to the vector store"
+    )
+    extraction: PaperExtraction = Field(
+        description="Structured metadata extracted from the paper via LLM"
     )
 
 
@@ -173,6 +179,9 @@ async def upload_pdfs(
     Accept one or more PDF uploads, extract text, embed every chunk with
     ``text-embedding-3-large``, and persist them to the pgvector store.
 
+    Structured metadata is extracted from each paper via GPT-4o-mini and
+    returned in the ``extraction`` field of each result.
+
     After a successful call the uploaded content is immediately searchable
     via **POST /chat**.
 
@@ -181,6 +190,8 @@ async def upload_pdfs(
     - ``pages``          – total page count
     - ``preview``        – first 1 000 characters of extracted text
     - ``chunks_stored``  – number of chunks saved to the vector store
+    - ``extraction``     – structured fields: title, authors, abstract,
+                           methodology, datasets, metrics, limitations
     """
     dest_dir = _ensure_upload_dir()
     results: list[FileResult] = []
@@ -197,13 +208,22 @@ async def upload_pdfs(
         # 2. Extract text
         parsed = _parse_or_warn(dest)
 
-        # 3-5. Chunk → embed → store  (blocking I/O → thread pool)
+        text = parsed["text"]
+
+        # 3-5. Run structured extraction and RAG ingest concurrently.
+        #      Both are blocking (network/DB) so they run in the thread pool.
+        extraction = PaperExtraction()
         chunks_stored = 0
-        if parsed["text"].strip():
+
+        if text.strip():
             try:
+                # Run sequentially to prevent concurrent lazy-imports of the
+                # openai package from deadlocking Python 3.14's _ModuleLock.
+                extraction = await asyncio.to_thread(extract_paper_fields, text)
                 chunks_stored = await asyncio.to_thread(
-                    _run_ingest_pipeline, parsed["text"], original_name
+                    _run_ingest_pipeline, text, original_name
                 )
+                await asyncio.to_thread(store_extraction, original_name, extraction)
             except RuntimeError as exc:
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -212,15 +232,16 @@ async def upload_pdfs(
             except Exception as exc:
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=f"Ingest pipeline failed for {original_name!r}: {exc}",
+                    detail=f"Pipeline failed for {original_name!r}: {exc}",
                 ) from exc
 
         results.append(
             FileResult(
                 filename=original_name,
                 pages=parsed["pages"],
-                preview=parsed["text"][:_PREVIEW_CHARS],
+                preview=text[:_PREVIEW_CHARS],
                 chunks_stored=chunks_stored,
+                extraction=extraction,
             )
         )
 

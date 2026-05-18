@@ -5,7 +5,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
 from app.api.chat import router as chat_router
+from app.api.documents import router as documents_router
+from app.api.evaluation import router as evaluation_router
 from app.api.health import router as health_router
+from app.api.knowledge_graph import router as knowledge_graph_router
 from app.api.upload import router as upload_router
 from app.core.config import settings
 
@@ -17,7 +20,35 @@ runs when it stops. Right now it's empty (just a yield), but it's a placeholder 
 '''
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Application lifespan: startup/shutdown hooks for future resources."""
+    """Application lifespan: initialise DB tables and wipe stale data on startup.
+
+    Every time the backend restarts we start with a clean slate:
+    - documents (embeddings) are cleared so only freshly uploaded papers appear
+    - paper_extractions are cleared to match
+    - query_evaluations are cleared so analytics always reflect the current session
+    """
+    from app.services.vector_store import (
+        delete_all_documents,
+        delete_all_evaluations,
+        ensure_tables,
+    )
+    try:
+        ensure_tables()
+    except Exception:
+        pass  # Non-fatal: DB may not be available yet (e.g. CI without credentials)
+
+    try:
+        delete_all_documents()
+        delete_all_evaluations()
+        # Also wipe paper_extractions so the knowledge graph is fresh.
+        from app.services.vector_store import _get_conn, _cursor
+        conn = _get_conn()
+        with _cursor() as cur:
+            cur.execute("DELETE FROM paper_extractions")
+        conn.commit()
+    except Exception:
+        pass  # Non-fatal — don't prevent startup if DB is temporarily unavailable
+
     yield
 
 
@@ -68,6 +99,9 @@ def create_application() -> FastAPI:
     application.include_router(health_router)
     application.include_router(upload_router)
     application.include_router(chat_router)
+    application.include_router(documents_router)
+    application.include_router(knowledge_graph_router)
+    application.include_router(evaluation_router)
     application.include_router(api_router, prefix="/api")
     return application
 

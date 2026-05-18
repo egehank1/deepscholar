@@ -2,7 +2,8 @@
 
 import { useCallback, useRef, useState } from "react";
 import { uploadSinglePdf, type FileResult } from "@/lib/api";
-import { useDocuments } from "@/context/DocumentsContext";
+import { useResearchStore } from "@/store/useResearchStore";
+import { ExtractionPanel } from "@/components/ExtractionPanel";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -250,8 +251,6 @@ function DocumentCard({
   doc: FileResult;
   onRemove: () => void;
 }) {
-  const [previewOpen, setPreviewOpen] = useState(false);
-
   return (
     <div className="flex flex-col rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm transition-shadow hover:shadow-md">
       {/* Header */}
@@ -285,27 +284,15 @@ function DocumentCard({
         </div>
       </div>
 
-      {/* Extraction preview toggle */}
-      {doc.preview && (
-        <div className="mt-4 border-t border-[var(--border)] pt-3">
-          <button
-            type="button"
-            onClick={() => setPreviewOpen((o) => !o)}
-            className="flex items-center gap-1.5 text-xs text-slate-400 transition-colors hover:text-slate-600 dark:hover:text-slate-300"
-          >
-            <ChevronIcon expanded={previewOpen} />
-            {previewOpen ? "Hide" : "Show"} extraction preview
-          </button>
-          {previewOpen && (
-            <div className="mt-2.5 max-h-36 overflow-y-auto rounded-lg border border-[var(--border)] bg-slate-50 p-3 font-mono text-[11px] leading-relaxed text-slate-600 dark:bg-slate-900/60 dark:text-slate-400">
-              {doc.preview}
-            </div>
-          )}
+      {/* Research Insights Panel */}
+      {doc.extraction && (
+        <div className="mt-4 border-t border-[var(--border)] pt-4">
+          <ExtractionPanel extraction={doc.extraction} />
         </div>
       )}
 
       {/* Footer */}
-      <div className="mt-auto flex justify-end border-t border-[var(--border)] pt-3 mt-4">
+      <div className="mt-4 flex justify-end border-t border-[var(--border)] pt-3">
         <button
           type="button"
           onClick={onRemove}
@@ -322,8 +309,10 @@ function DocumentCard({
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function UploadPage() {
-  const { documents, addDocuments, removeDocument, clearDocuments } =
-    useDocuments();
+  const uploadedDocuments = useResearchStore((s) => s.uploadedDocuments);
+  const addDocument = useResearchStore((s) => s.addDocument);
+  const removeDocument = useResearchStore((s) => s.removeDocument);
+  const clearDocuments = useResearchStore((s) => s.clearDocuments);
 
   const [managedFiles, setManagedFiles] = useState<ManagedFile[]>([]);
   const [dragging, setDragging] = useState(false);
@@ -412,7 +401,7 @@ export default function UploadPage() {
       }
     }
 
-    if (indexed.length) addDocuments(indexed);
+    indexed.forEach((doc) => addDocument(doc));
     setIsRunning(false);
   };
 
@@ -465,7 +454,7 @@ export default function UploadPage() {
             Total indexed
           </p>
           <p className="mt-2 text-2xl font-semibold text-[var(--accent)]">
-            {documents.length}
+            {uploadedDocuments.length}
           </p>
         </div>
       </div>
@@ -584,7 +573,7 @@ export default function UploadPage() {
       </div>
 
       {/* Indexed document library */}
-      {documents.length > 0 && (
+      {uploadedDocuments.length > 0 && (
         <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-sm">
           <div className="mb-5 flex items-start justify-between gap-4">
             <div>
@@ -592,8 +581,8 @@ export default function UploadPage() {
                 Indexed Library
               </h2>
               <p className="mt-0.5 text-xs text-slate-500">
-                {documents.length} document
-                {documents.length > 1 ? "s" : ""} · all available in Ask Your
+                {uploadedDocuments.length} document
+                {uploadedDocuments.length > 1 ? "s" : ""} · all available in Ask Your
                 Papers
               </p>
             </div>
@@ -607,7 +596,7 @@ export default function UploadPage() {
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
-            {documents.map((doc) => (
+            {uploadedDocuments.map((doc) => (
               <DocumentCard
                 key={doc.filename}
                 doc={doc}
