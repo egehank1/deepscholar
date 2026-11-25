@@ -92,6 +92,15 @@ export function uploadSinglePdf(
   });
 }
 
+// ── Documents ─────────────────────────────────────────────────────────────────
+
+export async function fetchIndexedSources(): Promise<string[]> {
+  const res = await fetch(`${API_URL}/documents`);
+  if (!res.ok) throw new Error(`Documents fetch failed (HTTP ${res.status})`);
+  const data = (await res.json()) as { sources: string[] };
+  return data.sources ?? [];
+}
+
 // ── Knowledge Graph ───────────────────────────────────────────────────────────
 
 export type NodeType = "paper" | "method" | "dataset" | "task";
