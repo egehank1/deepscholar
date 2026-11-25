@@ -1,4 +1,4 @@
-"""pgvector-backed vector store using Supabase (PostgreSQL).
+"""pgvector-backed vector store (local Postgres, Supabase, or any Postgres with pgvector).
 
 Design notes
 ------------
@@ -10,7 +10,7 @@ Design notes
   arrive as raw strings.
 * Both public functions are synchronous; wrap them in
   ``asyncio.get_event_loop().run_in_executor`` if you need async callers.
-* SUPABASE_DB_URL must be set in .env before either function is called.
+* DATABASE_URL (or the older SUPABASE_DB_URL) must be set before any query runs.
   The module imports cleanly without it so the app can start normally.
 
 Hybrid search notes
@@ -64,6 +64,7 @@ class SearchResult(dict):
 # ---------------------------------------------------------------------------
 
 _conn: Any = None   # psycopg2 connection — typed as Any to avoid stubs
+_schema_ready = False
 
 
 def _get_conn() -> Any:
@@ -74,20 +75,37 @@ def _get_conn() -> Any:
     if _conn is not None and not _conn.closed:
         return _conn
 
-    db_url = settings.SUPABASE_DB_URL
+    db_url = settings.DATABASE_URL
     if not db_url:
         raise RuntimeError(
-            "SUPABASE_DB_URL is not set. "
-            "Add it to your .env file:\n"
-            "  SUPABASE_DB_URL=postgresql://postgres:[PASSWORD]"
-            "@db.[REF].supabase.co:5432/postgres"
+            "DATABASE_URL is not set. Add it to backend/.env, e.g.\n"
+            "  DATABASE_URL=postgresql://deepscholar:deepscholar@localhost:5432/deepscholar\n"
+            "(that's the database from docker-compose.yml)."
         )
 
     _conn = psycopg2.connect(db_url)
     _conn.autocommit = False
 
+    # register_vector needs the extension to exist, so create it first.
+    # On a fresh local database this is what makes the first run just work.
+    with _conn.cursor() as cur:
+        cur.execute('CREATE EXTENSION IF NOT EXISTS vector')
+        cur.execute('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"')
+    _conn.commit()
+
     # Register the pgvector type adapter so vectors are handled natively.
     register_vector(_conn)
+
+    # If the database wasn't reachable when the API started, the tables were
+    # never created. Do it on the first successful connection instead.
+    global _schema_ready
+    if not _schema_ready:
+        _schema_ready = True
+        try:
+            ensure_tables()
+        except Exception:
+            _schema_ready = False
+            raise
 
     return _conn
 
@@ -118,7 +136,7 @@ def store_chunks(chunks: list[EmbeddedChunk]) -> list[str]:
     Raises
     ------
     RuntimeError
-        If ``SUPABASE_DB_URL`` is not configured.
+        If ``DATABASE_URL`` is not configured.
     psycopg2.Error
         Propagated on any database error; the transaction is rolled back.
     """
@@ -163,7 +181,7 @@ def delete_by_source(source: str) -> int:
     Raises
     ------
     RuntimeError
-        If ``SUPABASE_DB_URL`` is not configured.
+        If ``DATABASE_URL`` is not configured.
     psycopg2.Error
         Propagated on any database error; the transaction is rolled back.
     """
@@ -210,7 +228,7 @@ def search_similar(
     Raises
     ------
     RuntimeError
-        If ``SUPABASE_DB_URL`` is not configured.
+        If ``DATABASE_URL`` is not configured.
     psycopg2.Error
         Propagated on any database error.
     """
@@ -283,7 +301,7 @@ def keyword_search(
     Raises
     ------
     RuntimeError
-        If ``SUPABASE_DB_URL`` is not configured.
+        If ``DATABASE_URL`` is not configured.
     psycopg2.Error
         Propagated on any database error.
     """
@@ -333,7 +351,20 @@ def ensure_tables() -> None:
     Safe to call on every startup — uses ``CREATE TABLE IF NOT EXISTS``.
     """
     conn = _get_conn()
-    ddl = """
+    dims = int(settings.VECTOR_DIMENSIONS)
+    ddl = f"""
+        CREATE TABLE IF NOT EXISTS documents (
+            id         UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+            text       TEXT        NOT NULL,
+            embedding  vector({dims}) NOT NULL,
+            metadata   JSONB       NOT NULL DEFAULT '{{}}'::jsonb,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS documents_metadata_idx
+            ON documents USING gin (metadata);
+        CREATE INDEX IF NOT EXISTS documents_text_fts_idx
+            ON documents USING gin (to_tsvector('english', text));
+
         CREATE TABLE IF NOT EXISTS paper_extractions (
             id          UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
             source      TEXT        NOT NULL,
@@ -358,7 +389,7 @@ def ensure_tables() -> None:
             question             TEXT        NOT NULL,
             answer               TEXT        NOT NULL,
             citations            JSONB       NOT NULL DEFAULT '[]'::jsonb,
-            retrieval_stats      JSONB       NOT NULL DEFAULT '{}'::jsonb,
+            retrieval_stats      JSONB       NOT NULL DEFAULT '{{}}'::jsonb,
             retrieval_precision  FLOAT,
             citation_correctness FLOAT,
             answer_faithfulness  FLOAT,
@@ -371,10 +402,39 @@ def ensure_tables() -> None:
     try:
         with _cursor() as cur:
             cur.execute(ddl)
+            # pgvector can only index vectors up to 2000 dims. Bigger ones
+            # (text-embedding-3-large at 3072) still work, just with an exact
+            # scan, which is fine for a personal library.
+            if dims <= 2000:
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS documents_embedding_hnsw_idx "
+                    "ON documents USING hnsw (embedding vector_cosine_ops)"
+                )
         conn.commit()
     except Exception:
         conn.rollback()
         raise
+
+    _check_embedding_dims(conn, dims)
+
+
+def _check_embedding_dims(conn: Any, dims: int) -> None:
+    """Fail loudly if the table was created for a different embedding size."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT atttypmod FROM pg_attribute
+            WHERE attrelid = 'documents'::regclass AND attname = 'embedding'
+            """
+        )
+        row = cur.fetchone()
+    conn.commit()
+    if row and row[0] > 0 and row[0] != dims:
+        raise RuntimeError(
+            f"The documents table stores {row[0]}-dim vectors but VECTOR_DIMENSIONS is {dims}. "
+            "This happens after switching embedding models. Either switch back, or drop the "
+            "table (DROP TABLE documents;) and restart so it gets recreated, then re-upload your PDFs."
+        )
 
 
 def store_extraction(source: str, extraction: "Any") -> None:
@@ -664,7 +724,7 @@ def hybrid_search(
     Raises
     ------
     RuntimeError
-        If ``SUPABASE_DB_URL`` is not configured.
+        If ``DATABASE_URL`` is not configured.
     psycopg2.Error
         Propagated on any database error.
     """

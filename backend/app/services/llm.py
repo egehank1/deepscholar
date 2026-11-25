@@ -1,8 +1,8 @@
-"""LLM completion service — grounded answers via GPT-4o-mini.
+"""LLM completion service: grounded answers from the configured chat model.
 
 Design notes
 ------------
-* The OpenAI client is created lazily and cached (same pattern as embeddings.py).
+* The client comes from ``ai_client.py`` (OpenAI or Ollama, same code path).
 * The model is instructed to answer *only* from the supplied context passages and
   to emit a JSON object with ``answer`` and ``citations`` keys.
 * ``response_format={"type": "json_object"}`` is used so the model is guaranteed
@@ -28,13 +28,9 @@ import re
 from typing import Any
 
 from app.core.config import settings
+from app.services.ai_client import get_client
 from app.services.vector_store import SearchResult
 
-# Import openai at module level — see embeddings.py for the full rationale.
-try:
-    import openai as _openai_module
-except ModuleNotFoundError:
-    _openai_module = None  # type: ignore[assignment]
 
 # ---------------------------------------------------------------------------
 # Public types
@@ -69,9 +65,6 @@ class GroundedAnswer:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-_client: Any = None  # openai.OpenAI — typed as Any to avoid hard import
-
-_MODEL = "gpt-4o-mini"
 
 _SYSTEM_PROMPT = """\
 You are a strict research assistant whose ONLY task is to answer the user's \
@@ -158,26 +151,6 @@ Refusal (when passages are insufficient):
 }
 """
 
-
-def _get_client() -> Any:
-    global _client
-    if _client is not None:
-        return _client
-
-    api_key = settings.OPENAI_API_KEY
-    if not api_key:
-        raise RuntimeError(
-            "OPENAI_API_KEY is not set. "
-            "Add it to your .env file or export it as an environment variable."
-        )
-
-    if _openai_module is None:
-        raise RuntimeError(
-            "The 'openai' package is not installed. Run: pip install openai>=1.30.0"
-        )
-
-    _client = _openai_module.OpenAI(api_key=api_key)
-    return _client
 
 def _chunk_source(chunk: SearchResult) -> str:
     """Return the canonical source label for a chunk (filename or id fallback)."""
@@ -550,7 +523,7 @@ def answer_with_context(question: str, chunks: list[SearchResult]) -> GroundedAn
     openai.OpenAIError
         Propagated directly so the caller can handle rate-limit / auth errors.
     """
-    client = _get_client()
+    client = get_client()
 
     # Group chunks by source for multi-paper prompts so the LLM can summarise
     # each paper from a contiguous block of passages.  The same ordering is
@@ -562,7 +535,7 @@ def answer_with_context(question: str, chunks: list[SearchResult]) -> GroundedAn
     user_message = f"{context_block}\n\nQuestion: {question}"
 
     response = client.chat.completions.create(
-        model=_MODEL,
+        model=settings.CHAT_MODEL,
         response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": _SYSTEM_PROMPT},

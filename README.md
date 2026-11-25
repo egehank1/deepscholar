@@ -1,400 +1,207 @@
 # DeepScholar
 
-> A research copilot for academic literature. Upload PDFs, get structured metadata, ask questions across your library, and explore the connections between papers as a knowledge graph. Every answer is grounded in the source text with inline citations.
+Ask questions about a pile of research papers and get answers you can actually check. Every sentence points back to the passage it came from, and anything the model can't back up with a citation gets cut before you see it.
+
+Runs fully local with [Ollama](https://ollama.com) (no API key, your PDFs never leave your machine), or with OpenAI if you prefer.
 
 <p align="center">
-  <img src="docs/screenshots/landing.png" alt="DeepScholar landing page" width="900" />
-</p>
-<!-- Put a screenshot of `/` (the Workspace landing page) here. A 1600x900 PNG works best. -->
-
-<p align="center">
-  <a href="#features">Features</a> ·
-  <a href="#architecture">Architecture</a> ·
-  <a href="#the-rag-pipeline">RAG Pipeline</a> ·
-  <a href="#installation">Installation</a> ·
-  <a href="#api-reference">API</a>
+  <img src="docs/screenshots/chat.png" alt="Asking a question across several papers, with inline citations" width="900" />
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white" />
-  <img src="https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white" />
-  <img src="https://img.shields.io/badge/Next.js-14-000000?logo=nextdotjs&logoColor=white" />
-  <img src="https://img.shields.io/badge/pgvector-Supabase-3ECF8E?logo=supabase&logoColor=white" />
-  <img src="https://img.shields.io/badge/OpenAI-gpt--4o--mini-412991?logo=openai&logoColor=white" />
-  <img src="https://img.shields.io/badge/License-MIT-blue" />
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#what-you-get">What you get</a> ·
+  <a href="#how-retrieval-works">How retrieval works</a> ·
+  <a href="#configuration">Configuration</a> ·
+  <a href="#api">API</a>
 </p>
 
----
+## Why I built this
 
-## What it does
+I kept misattributing quotes. I'd write a paragraph comparing two papers and realise later that the line I used came from a third one. Generic chatbots weren't any better, they'd happily invent a citation that looked right.
 
-DeepScholar turns a folder of PDFs into a searchable, queryable, visualisable research workspace.
+So the rule for DeepScholar is simple: the model only gets to say what's in the retrieved passages, with a `[N]` marker on every claim. A post-processing pass strips uncited sentences, and the citation list is rebuilt from the markers the answer actually uses, so the two can't drift apart. The longer story is in [docs/writeup.md](docs/writeup.md).
 
-1. **Upload** one or many academic PDFs.
-2. The backend extracts text, chunks it, embeds every chunk with `text-embedding-3-large`, and writes it to a pgvector store on Supabase.
-3. In parallel, GPT-4o-mini reads the paper and pulls out structured fields: title, authors, abstract, methodology, methods, datasets, metrics, tasks, prior work this paper improves on, and limitations.
-4. Ask questions in natural language. A hybrid retriever (vector + keyword, fused with Reciprocal Rank Fusion, reranked with BM25) selects the relevant passages and GPT-4o-mini writes a grounded answer where every factual sentence carries an inline `[N]` citation marker.
-5. Open the knowledge graph to see how your papers connect through shared methods, datasets, and tasks.
-6. Open analytics to inspect the quality of every answer the system has ever produced (retrieval precision, citation correctness, answer faithfulness).
+## Quick start
 
-> The whole stack is engineered around one rule: the model is not allowed to say anything that is not in the retrieved passages, and if it tries to, the post-processor strips the sentence before the user sees it.
-
----
-
-## Features
-
-### Document ingestion
-* Multi-file PDF upload with magic-byte validation.
-* PyMuPDF text extraction.
-* Sentence-aware overlapping chunking (1 000-token windows, 150-token overlap, with chunk boundaries snapped to sentence ends).
-* Per-paper structured extraction via GPT-4o-mini with JSON mode (zero hallucinated fields, missing data returns `null` / `[]`).
-* Re-uploading the same PDF replaces the old vectors instead of duplicating them.
-
-<p align="center">
-  <img src="docs/screenshots/upload.png" alt="Upload screen with extraction results" width="900" />
-</p>
-<!-- Put a screenshot of `/upload` here, ideally one that shows the extraction panel populated with title/authors/methodology after an upload completes. -->
-
-### Retrieval-augmented chat
-* Hybrid search: cosine over OpenAI embeddings plus PostgreSQL `to_tsvector` keyword search, fused with parameter-free Reciprocal Rank Fusion (`k=60`).
-* BM25 reranker (Okapi, `k1=1.5`, `b=0.75`) combined with normalised vector scores to balance lexical precision and semantic relevance.
-* Intent-aware retrieval. Queries like *"summarise each paper"* or *"compare the contributions"* automatically switch to a per-source retrieval path that fetches the top-k from every paper independently.
-* Source coverage guarantee. Before the LLM call, the pipeline checks that every indexed paper has at least one chunk in the final context and back-fills any missing source.
-* Grounded answers with per-sentence `[N]` citation markers. Any uncited factual sentence is stripped by a post-processing pass.
-* Citation reconciliation. If the model emits markers that do not match its citations array (a common failure mode), the parser rebuilds the citation list directly from the markers actually used in the answer.
-
-<p align="center">
-  <img src="docs/screenshots/chat.png" alt="Chat interface with citations" width="900" />
-</p>
-<!-- Put a screenshot of `/chat` here. Best result: a multi-paper question with an answer that has multiple bold paper titles and a citation panel expanded below. -->
-
-### Paper comparison
-Side-by-side comparison of structured fields across any subset of your uploaded papers. Methodology, datasets, metrics, and limitations rendered in one synchronised view.
-
-<p align="center">
-  <img src="docs/screenshots/compare.png" alt="Paper comparison view" width="900" />
-</p>
-<!-- Put a screenshot of `/compare` here. Two or three papers selected at once shows the value best. -->
-
-### Knowledge graph
-Force-directed graph rendered with `react-force-graph-2d`. Nodes are papers, methods, datasets, and tasks. Edges are typed: `uses`, `evaluates_on`, `addresses`, and `improves`. Filter by node type or edge type, click a node for its metadata, drag to rearrange.
-
-<p align="center">
-  <img src="docs/screenshots/graph.png" alt="Knowledge graph of uploaded papers" width="900" />
-</p>
-<!-- Put a screenshot of `/graph` here. Ideally with at least 4-5 papers uploaded so you see the cross-paper edges. -->
-
-### Quality analytics
-Every chat response is scored on three independent metrics and logged. The dashboard shows aggregate averages, a 30-day daily trend, and a paginated log of every query the system has answered.
-
-* **Retrieval Precision**: fraction of retrieved chunks that ended up cited (with a source-coverage variant for multi-paper queries).
-* **Citation Correctness**: fraction of model-emitted citations whose tokens are actually present in the retrieved chunk they were attributed to.
-* **Answer Faithfulness**: fraction of factual sentences in the answer that carry at least one `[N]` marker.
-
-<p align="center">
-  <img src="docs/screenshots/analytics.png" alt="RAG quality analytics dashboard" width="900" />
-</p>
-<!-- Put a screenshot of `/analytics` here, ideally after running ~20 queries so the trend chart has shape. -->
-
----
-
-## Architecture
-
-```
-                              ┌──────────────────────────────────────┐
-                              │           Next.js 14 frontend        │
-                              │   /upload  /chat  /compare  /graph   │
-                              │            /analytics                │
-                              └──────────────────────────────────────┘
-                                              │  REST
-                                              ▼
-                              ┌──────────────────────────────────────┐
-                              │            FastAPI backend           │
-                              │                                      │
-   POST /upload  ─────────►   │  PDF → text → chunk → embed → store  │
-                              │  parallel: GPT-4o-mini structured    │
-                              │             field extraction         │
-                              │                                      │
-   POST /chat    ─────────►   │  embed query → hybrid search         │
-                              │  → RRF fusion → BM25 rerank          │
-                              │  → coverage guarantee                │
-                              │  → grounded LLM answer               │
-                              │  → citation validation               │
-                              │  → quality evaluation + log          │
-                              │                                      │
-   GET  /api/knowledge-graph  │  paper_extractions → typed graph     │
-   GET  /api/evaluation/*     │  per-query RAG metrics               │
-                              └──────────────────────────────────────┘
-                                              │
-                                              ▼
-                              ┌──────────────────────────────────────┐
-                              │      Supabase Postgres + pgvector    │
-                              │  documents          (chunks + vecs)  │
-                              │  paper_extractions  (structured md)  │
-                              │  query_evaluations  (RAG quality log)│
-                              └──────────────────────────────────────┘
-                                              │
-                                              ▼
-                              ┌──────────────────────────────────────┐
-                              │            OpenAI API                │
-                              │  text-embedding-3-large (3072 dims)  │
-                              │  gpt-4o-mini (JSON mode)             │
-                              └──────────────────────────────────────┘
-```
-
----
-
-## The RAG pipeline
-
-This is the part recruiters usually want to read closely. Every step exists for a specific failure mode I hit during development.
-
-### 1. Hybrid retrieval
-Pure vector search misses queries that hinge on rare terms (e.g. a specific dataset name). Pure keyword search misses paraphrased questions. So both run in parallel and are fused with Reciprocal Rank Fusion:
-
-```
-RRF(d) = Σ  1 / (k + rank_i(d))
-```
-
-with `k = 60` (the original Cormack et al. constant). RRF is parameter-free, requires no score normalisation, and consistently beats linear score combinations in practice. See `backend/app/services/vector_store.py::hybrid_search`.
-
-### 2. Intent-aware retrieval
-A global hybrid search will over-represent whichever paper happens to share vocabulary with the query. For multi-paper questions ("compare the contributions", "summarise each paper") that silently drops documents. A regex-based intent classifier flips the pipeline into a per-source path that fetches the top-K chunks from every indexed paper independently. See `backend/app/api/chat.py::_is_multi_doc_query` and `_retrieve_per_source`.
-
-### 3. BM25 reranking
-After dedup, the candidate pool is rescored with Okapi BM25 and combined with the normalised vector score:
-
-```
-final = 0.4 × norm_vector + 0.6 × norm_bm25
-```
-
-The 60/40 split slightly favours lexical precision because grounded Q&A rewards chunks that literally contain the query terms. Pure Python, no extra deps. See `backend/app/services/reranker.py`.
-
-### 4. Coverage guarantee
-After reranking, the pipeline checks that every paper in scope has at least one passage in the final context. Any missing source is back-filled with its single best hybrid match. This runs *after* reranking so the surviving high-quality passages are never displaced.
-
-### 5. Grounded generation
-GPT-4o-mini is called with `response_format=json_object` and a system prompt with seven hard rules: context-only, cite every claim, no uncited synthesis, refuse gracefully, citation fidelity, JSON envelope with markdown body, and a strict multi-document layout (one paragraph per paper, bold title heading, citations restricted to that paper). Temperature is fixed at 0.
-
-### 6. Citation reconciliation
-Models occasionally emit `[N]` markers that disagree with their `citations` array. The parser ignores the model's citation list and rebuilds it from the markers actually present in the answer, then renumbers everything `[1], [2], [3], ...` so the inline markers and the citation panel can never disagree.
-
-### 7. Defence-in-depth filtering
-A final pass scans every sentence in the answer. If it makes a factual claim but has no `[N]` marker, it is stripped. This catches the rare case where the model forgets to cite mid-answer.
-
-### 8. Quality evaluation
-After every response, three metrics are computed synchronously and logged to Postgres. The dashboard at `/analytics` surfaces them so regressions are visible. See `backend/app/services/evaluation.py`.
-
----
-
-## Tech stack
-
-**Backend**
-* Python 3.11+
-* FastAPI for the HTTP layer with full OpenAPI docs at `/docs`
-* psycopg2 + pgvector for the vector store
-* PyMuPDF for PDF parsing
-* OpenAI Python client for embeddings and chat completions
-* Pure-Python BM25 implementation, no heavy ML deps
-
-**Frontend**
-* Next.js 14 (App Router)
-* React 18 + TypeScript
-* Tailwind CSS for the design system
-* Zustand for client state
-* react-markdown for rendering grounded answers with bold paper titles
-* react-force-graph-2d for the knowledge graph
-
-**Data**
-* Supabase Postgres with the `pgvector` and `uuid-ossp` extensions
-* IVFFlat index on cosine distance
-* GIN index on the `to_tsvector('english', text)` keyword column
-
-**LLM stack**
-* `text-embedding-3-large` (3 072 dimensions) for embeddings
-* `gpt-4o-mini` with JSON mode for structured extraction and grounded answers
-
----
-
-## Installation
-
-DeepScholar has two services: a FastAPI backend and a Next.js frontend. You will also need a Supabase project (or any Postgres 14+ with pgvector) and an OpenAI API key.
-
-### Prerequisites
-* Python 3.11 or newer
-* Node.js 18 or newer
-* A Supabase project (free tier is fine) or local Postgres with the `pgvector` extension
-* An OpenAI API key with access to `text-embedding-3-large` and `gpt-4o-mini`
-
-### 1. Clone the repo
+You need Docker, Python 3.11+, Node 18+ and Ollama.
 
 ```bash
-git clone https://github.com/<your-username>/deepscholar.git
+git clone https://github.com/egehank1/deepscholar.git
 cd deepscholar
-```
 
-### 2. Set up the database
+# 1. models (one-time, ~5 GB)
+ollama pull qwen2.5:7b
+ollama pull nomic-embed-text
 
-In the Supabase SQL editor (or with `psql`), run the schema file:
+# 2. database (Postgres + pgvector)
+docker compose up -d
 
-```bash
-psql "$SUPABASE_DB_URL" -f backend/sql/schema.sql
-```
-
-This creates the `documents` table, the IVFFlat embedding index, the metadata GIN index, and enables `uuid-ossp` and `vector`. The `paper_extractions` and `query_evaluations` tables are created automatically on backend startup.
-
-### 3. Run the backend
-
-```bash
+# 3. backend
 cd backend
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-
-cp .env.example .env               # or create it from scratch
-```
-
-`.env` template:
-
-```dotenv
-OPENAI_API_KEY=sk-...
-SUPABASE_DB_URL=postgresql://postgres:[PASSWORD]@db.[PROJECT_REF].supabase.co:5432/postgres
-CORS_ORIGINS=http://localhost:3000
-UPLOAD_DIR=./data/uploads
-```
-
-Then start the API:
-
-```bash
+cp .env.example .env
 uvicorn app.main:app --reload
-```
 
-The interactive docs live at `http://localhost:8000/docs`.
-
-### 4. Run the frontend
-
-In a separate terminal:
-
-```bash
+# 4. frontend (new terminal)
 cd frontend
 npm install
 npm run dev
 ```
 
-Open `http://localhost:3000` and head to **Upload Literature** to drop in your first PDF.
+Open http://localhost:3000, go to **Upload**, drop in a few PDFs and start asking.
 
-### Production notes
-* Swap the single cached psycopg2 connection in `vector_store.py` for `psycopg2.pool.ThreadedConnectionPool` before deploying with multiple workers.
-* `CORS_ORIGINS` should be a comma-separated list of your production domains, never `*` when credentials are enabled.
-* `lifespan` in `backend/app/main.py` wipes vectors on startup. That is deliberate for the demo workflow. Remove the `delete_all_documents()` / `delete_all_evaluations()` calls if you want persistence across restarts.
+Tables are created automatically on first start. `http://localhost:8000/health` tells you which models are in use and whether the database is reachable.
 
----
+**One Ollama setting matters:** Ollama's default context window can be as small as 4k tokens, and a multi-paper question sends a lot more than that. Start Ollama with a bigger one or answers get silently truncated:
 
-## API reference
+```bash
+OLLAMA_CONTEXT_LENGTH=16384 ollama serve
+```
 
-Full OpenAPI spec lives at `/docs` when the backend is running. The headline endpoints:
+Prefer containers for everything? `docker compose --profile app up -d --build` runs the backend and frontend too (Ollama stays on the host so it can use your GPU).
 
-| Method | Path                        | Description                                                                |
-|--------|-----------------------------|----------------------------------------------------------------------------|
-| POST   | `/upload`                   | Upload one or more PDFs, extract metadata, embed and store chunks          |
-| POST   | `/chat`                     | Ask a question against the indexed corpus, returns a grounded answer       |
-| GET    | `/documents`                | List every indexed source filename                                         |
-| DELETE | `/documents/{source}`       | Remove a paper's vectors from the index                                    |
-| GET    | `/api/knowledge-graph`      | Return the full typed graph of papers, methods, datasets, tasks            |
-| GET    | `/api/evaluation/logs`      | Paginated quality log of every chat query, newest first                    |
-| GET    | `/api/evaluation/analytics` | Aggregate averages plus 30-day daily trend                                 |
-| DELETE | `/api/evaluation/logs`      | Clear all quality logs                                                     |
-| GET    | `/health`                   | Liveness probe                                                             |
+### Using OpenAI instead
 
-### Example: ask a question
+In `backend/.env`:
+
+```dotenv
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-...
+```
+
+That gives you `gpt-4o-mini` and `text-embedding-3-large`. Any other OpenAI-compatible server (LM Studio, vLLM, llama.cpp) works too via `OPENAI_BASE_URL`.
+
+## What you get
+
+**Upload.** Drop in one or many PDFs. Text is extracted with PyMuPDF, split into overlapping chunks that end on sentence boundaries, embedded and stored in pgvector. At the same time the model pulls out title, authors, abstract, methodology, datasets, metrics, tasks, prior work and limitations. Fields it can't find stay empty instead of being made up. Uploading the same file again replaces it.
+
+<p align="center">
+  <img src="docs/screenshots/upload.png" alt="Upload page with extracted metadata" width="900" />
+</p>
+
+**Chat.** Ask in plain language. Questions like "compare the methods of each paper" are detected and retrieved per paper, so one paper with lots of overlapping vocabulary can't crowd out the others.
+
+**Compare.** Pick a few papers and see methodology, datasets, metrics and limitations side by side.
+
+<p align="center">
+  <img src="docs/screenshots/compare.png" alt="Side-by-side paper comparison" width="900" />
+</p>
+
+**Knowledge graph.** Papers, methods, datasets and tasks as nodes, linked by `uses`, `evaluates_on`, `addresses` and `improves`. Useful for spotting which of your papers share a benchmark.
+
+<p align="center">
+  <img src="docs/screenshots/graph.png" alt="Knowledge graph of uploaded papers" width="900" />
+</p>
+
+**Analytics.** Every answer is scored and logged, so you can see when retrieval gets worse:
+
+- *retrieval precision*: how many retrieved chunks ended up cited
+- *citation correctness*: whether cited text is really in the chunk it's attributed to
+- *answer faithfulness*: share of factual sentences that carry a citation
+
+These are cheap heuristics, not an LLM judge. They catch regressions well, they don't prove an answer is correct.
+
+<p align="center">
+  <img src="docs/screenshots/analytics.png" alt="Answer quality dashboard" width="900" />
+</p>
+
+## How retrieval works
+
+Every step here is a fix for something that went wrong during development.
+
+1. **Hybrid search.** Vector search misses exact names (a dataset, a metric); keyword search misses paraphrases. Both run and get merged with Reciprocal Rank Fusion, `score = Σ 1 / (60 + rank)`. No score normalisation needed. → `services/vector_store.py`
+2. **Per-paper retrieval for multi-paper questions.** A cheap regex classifier spots "compare / each paper / summarise all" style questions and pulls top-k from every paper separately. → `api/chat.py`
+3. **BM25 rerank.** The candidate pool is rescored with Okapi BM25 and blended `0.6 × bm25 + 0.4 × vector`. Leaning lexical works better for grounded Q&A, where the right chunk usually contains the query terms. Plain Python, no extra dependency. → `services/reranker.py`
+4. **Coverage check.** After reranking, any paper in scope with zero passages gets its single best match added back.
+5. **Grounded generation.** JSON mode, temperature 0, and a system prompt that only allows answers from the given passages, with one cited paragraph per paper for comparisons.
+6. **Citation reconciliation.** Models sometimes cite `[7]` in the text but list something else in their citations array. The parser ignores that array, rebuilds citations from the markers actually used and renumbers them `[1]`, `[2]`, … → `services/llm.py`
+7. **Strip uncited claims.** Any factual-looking sentence without a marker is removed.
+8. **Score it.** The three metrics above are computed and stored for the analytics page. → `services/evaluation.py`
+
+```
+PDF ─► text ─► chunks ─► embeddings ─► pgvector
+                 └─► structured extraction ─► paper_extractions ─► graph / compare
+
+question ─► embed ─► vector + keyword search ─► RRF ─► BM25 rerank
+         ─► coverage check ─► LLM (JSON) ─► reconcile citations ─► strip uncited ─► score
+```
+
+## Configuration
+
+All settings live in `backend/.env` (see [`.env.example`](backend/.env.example)).
+
+| Variable | Default | |
+|---|---|---|
+| `LLM_PROVIDER` | `openai` (`.env.example` sets `ollama`) | `ollama` or `openai` |
+| `CHAT_MODEL` | `qwen2.5:7b` / `gpt-4o-mini` | any chat model your provider has |
+| `EMBEDDING_MODEL` | `nomic-embed-text` / `text-embedding-3-large` | |
+| `VECTOR_DIMENSIONS` | 768 / 3072 | filled in for known models, set it for others |
+| `DATABASE_URL` | – | any Postgres with pgvector; Supabase works (`SUPABASE_DB_URL` is still read) |
+| `RESET_ON_STARTUP` | `false` | wipe papers and logs on every restart |
+| `OLLAMA_BASE_URL` | `http://localhost:11434/v1` | |
+| `OPENAI_BASE_URL` | – | for other OpenAI-compatible servers |
+
+**Switching embedding models** changes the vector size. The backend notices on startup and tells you. Drop the `documents` table (or the whole volume, `docker compose down -v`) and re-upload.
+
+**About 3072-dim vectors:** pgvector can only index up to 2000 dimensions, so with `text-embedding-3-large` at full size search is an exact scan. That's fine for a personal library. For bigger ones set `VECTOR_DIMENSIONS=1536`, and an HNSW index gets created.
+
+## API
+
+Interactive docs at http://localhost:8000/docs.
+
+| Method | Path | |
+|---|---|---|
+| POST | `/upload` | upload PDFs (multipart), extract, embed, store |
+| POST | `/chat` | `{"question": "...", "sources": []}` → answer + citations + retrieval stats |
+| GET | `/documents` | indexed filenames |
+| DELETE | `/documents/{source}` | remove a paper |
+| GET | `/api/knowledge-graph` | nodes and typed edges |
+| GET | `/api/evaluation/logs` | per-question quality log |
+| GET | `/api/evaluation/analytics` | averages and 30-day trend |
+| GET | `/health` | status, models in use, database check |
 
 ```bash
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
-  -d '{
-    "question": "Compare the methodologies of each paper.",
-    "sources": []
-  }'
+  -d '{"question": "Compare the methodologies of each paper.", "sources": []}'
 ```
-
-Response shape:
-
-```json
-{
-  "answer": "**Attention Is All You Need.**\n\nThe authors introduce the Transformer, an architecture based entirely on self-attention [1]...",
-  "citations": [
-    {"text": "We propose a new simple network architecture, the Transformer...", "source": "attention.pdf"}
-  ],
-  "retrieval_stats": {
-    "hybrid_candidates": 25,
-    "after_dedup": 21,
-    "sent_to_llm": 9,
-    "multi_doc": true,
-    "sources_in_context": ["attention.pdf", "bert.pdf", "gpt3.pdf"],
-    "eval": {
-      "retrieval_precision": 1.0,
-      "citation_correctness": 1.0,
-      "answer_faithfulness": 1.0,
-      "overall_score": 1.0
-    }
-  }
-}
-```
-
----
 
 ## Project layout
 
 ```
-deepscholar/
-├── backend/
-│   ├── app/
-│   │   ├── api/                # FastAPI routers (chat, upload, documents, graph, eval)
-│   │   ├── core/               # Settings (pydantic-settings)
-│   │   ├── services/
-│   │   │   ├── chunking.py     # Sentence-aware overlapping chunker
-│   │   │   ├── embeddings.py   # OpenAI embeddings client
-│   │   │   ├── extraction.py   # GPT-4o-mini structured field extraction
-│   │   │   ├── llm.py          # Grounded answer + citation reconciliation
-│   │   │   ├── reranker.py     # Okapi BM25 reranker
-│   │   │   ├── evaluation.py   # RAG quality metrics
-│   │   │   ├── vector_store.py # pgvector + hybrid search + RRF fusion
-│   │   │   └── pdf_parser.py   # PyMuPDF wrapper
-│   │   └── main.py             # FastAPI app factory + lifespan hooks
-│   ├── sql/                    # schema.sql, evaluation.sql, knowledge_graph.sql
-│   └── requirements.txt
-└── frontend/
-    ├── app/                    # Next.js App Router pages
-    │   ├── upload/             # PDF upload + extraction view
-    │   ├── chat/               # Grounded Q&A with citations
-    │   ├── compare/            # Side-by-side paper comparison
-    │   ├── graph/              # Force-directed knowledge graph
-    │   └── analytics/          # RAG quality dashboard
-    ├── components/             # AppShell, Navbar, ExtractionPanel, Providers
-    ├── store/useResearchStore.ts  # Zustand store for client state
-    ├── lib/api.ts              # Typed REST client
-    └── package.json
+backend/
+  app/api/          FastAPI routes (upload, chat, documents, graph, evaluation)
+  app/services/     chunking, embeddings, extraction, llm, reranker, evaluation, vector_store
+  app/core/         settings
+  tests/            pytest
+frontend/
+  app/              Next.js pages: upload, chat, compare, graph, analytics
+  components/ lib/ store/
+docker-compose.yml  Postgres + pgvector (and optionally the app)
 ```
 
----
+Run the backend tests with `pip install -r requirements-dev.txt && pytest`.
 
-## What's next
+## Known limitations
 
-A short list of things I want to add next, in roughly the order I plan to ship them:
+- Scanned PDFs without a text layer come out empty (no OCR yet).
+- Small local models follow the citation rules less reliably than `gpt-4o-mini`. Extraction quality also drops, especially for the knowledge graph. 7B+ models are the practical minimum.
+- One shared database connection. Fine locally, not for multiple workers.
+- No auth. Don't expose it to the internet as is.
 
-* Connection pooling on the backend so the same instance scales past one worker without tripping over psycopg2.
-* Streaming answers from `/chat` via Server-Sent Events. The frontend already shows a typing indicator, so the swap is mostly mechanical.
-* A "follow-up question" mode that reuses the previous turn's retrieved chunks as a tie-breaker.
-* Local-only mode using `sentence-transformers/all-MiniLM-L6-v2` for embeddings and a llama.cpp-served Mistral for generation, for users who can't send papers to OpenAI.
-* Cross-encoder reranking as an optional second stage when latency budget allows.
+## Roadmap
 
----
+- streaming answers
+- follow-up questions that reuse the previous turn's passages
+- optional cross-encoder rerank
+- OCR fallback for scanned papers
+
+Issues and PRs are welcome. If you try it with a local model, I'd like to hear which one worked best for you.
 
 ## License
 
-MIT. See `LICENSE`.
+MIT, see [LICENSE](LICENSE).
 
-## Acknowledgements
-
-* Reciprocal Rank Fusion, Cormack, Clarke and Buettcher, 2009.
-* Okapi BM25 from Robertson and Zaragoza, *The Probabilistic Relevance Framework: BM25 and Beyond*, 2009.
-* The pgvector project for making vector search feel like just another `ORDER BY`.
+Reciprocal Rank Fusion is from Cormack, Clarke & Büttcher (2009). BM25 follows Robertson & Zaragoza, *The Probabilistic Relevance Framework: BM25 and Beyond* (2009).

@@ -1,0 +1,58 @@
+# Local Postgres + pgvector for DeepScholar.
+#
+#   docker compose up -d          # just the database (run backend/frontend yourself)
+#   docker compose --profile app up -d --build   # database + backend + frontend
+#
+# Ollama runs on your machine (not in here) so it can use your GPU.
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: deepscholar
+      POSTGRES_PASSWORD: deepscholar
+      POSTGRES_DB: deepscholar
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deepscholar"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    profiles: ["app"]
+    build: ./backend
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://deepscholar:deepscholar@db:5432/deepscholar
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
+      UPLOAD_DIR: /data/uploads
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8000:8000"
+    volumes:
+      - uploads:/data/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    profiles: ["app"]
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  uploads:
