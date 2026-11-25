@@ -29,3 +29,8 @@ backend/data/uploads/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local data
+backend/data/
+*.pdf
+!docs/**/*.pdf

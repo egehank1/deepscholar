@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TypedDict
 
-import fitz  # PyMuPDF
+import pymupdf as fitz  # PyMuPDF (the old "fitz" import name is deprecated)
 
 
 class PDFParseResult(TypedDict):

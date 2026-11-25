@@ -1,5 +1,11 @@
 -- DeepScholar — pgvector schema
--- Run this once in your Supabase SQL editor (or via psql).
+--
+-- You don't need to run this by hand anymore: the backend creates all tables
+-- on startup, sized to VECTOR_DIMENSIONS. It's kept here as a reference and
+-- for people who prefer managing schema themselves.
+--
+-- The vector(3072) below matches text-embedding-3-large. The local default
+-- (nomic-embed-text via Ollama) is 768 dims, so change it if you run this.
 --
 -- Prerequisites (already enabled on Supabase by default):
 --   CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -25,15 +31,13 @@ CREATE TABLE IF NOT EXISTS documents (
 );
 
 -- ---------------------------------------------------------------------------
--- 3. IVFFlat index for fast approximate nearest-neighbour search
---    lists=100 is a sensible starting point for up to ~1 M rows.
---    Rebuild with a higher value as your dataset grows.
---    cosine distance matches OpenAI's recommended similarity metric.
+-- 3. ANN index
+--    pgvector can't index more than 2000 dims, so with 3072-dim vectors there
+--    is no index and search is an exact scan (fast enough for a few thousand
+--    chunks). For <= 2000 dims, use:
+--      CREATE INDEX documents_embedding_hnsw_idx
+--          ON documents USING hnsw (embedding vector_cosine_ops);
 -- ---------------------------------------------------------------------------
-CREATE INDEX IF NOT EXISTS documents_embedding_idx
-    ON documents
-    USING ivfflat (embedding vector_cosine_ops)
-    WITH (lists = 100);
 
 -- ---------------------------------------------------------------------------
 -- 4. Helper index on metadata fields used in search_similar filters

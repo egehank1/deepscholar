@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -12,57 +13,47 @@ from app.api.knowledge_graph import router as knowledge_graph_router
 from app.api.upload import router as upload_router
 from app.core.config import settings
 
-'''
-(A hook is just a function that gets called automatically at a specific moment in time you don't call it yourself, the framework does.)
-This is a startup/shutdown hook. Code before yield runs when the server starts, code after 
-runs when it stops. Right now it's empty (just a yield), but it's a placeholder for things like connecting
- to a database on startup and disconnecting on shutdown.
-'''
+logger = logging.getLogger("uvicorn.error")
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Application lifespan: initialise DB tables and wipe stale data on startup.
-
-    Every time the backend restarts we start with a clean slate:
-    - documents (embeddings) are cleared so only freshly uploaded papers appear
-    - paper_extractions are cleared to match
-    - query_evaluations are cleared so analytics always reflect the current session
-    """
+    """Create tables on startup. Optionally wipe everything (RESET_ON_STARTUP)."""
     from app.services.vector_store import (
+        _cursor,
+        _get_conn,
         delete_all_documents,
         delete_all_evaluations,
         ensure_tables,
     )
+
     try:
         ensure_tables()
-    except Exception:
-        pass  # Non-fatal: DB may not be available yet (e.g. CI without credentials)
+    except RuntimeError as exc:
+        # Config problems (missing DATABASE_URL, wrong vector size): say so clearly.
+        logger.error("%s", exc)
+    except Exception as exc:  # DB not up yet, etc. Don't block startup.
+        logger.warning("Could not prepare the database: %s", exc)
 
-    try:
-        delete_all_documents()
-        delete_all_evaluations()
-        # Also wipe paper_extractions so the knowledge graph is fresh.
-        from app.services.vector_store import _get_conn, _cursor
-        conn = _get_conn()
-        with _cursor() as cur:
-            cur.execute("DELETE FROM paper_extractions")
-        conn.commit()
-    except Exception:
-        pass  # Non-fatal — don't prevent startup if DB is temporarily unavailable
+    if settings.RESET_ON_STARTUP:
+        try:
+            delete_all_documents()
+            delete_all_evaluations()
+            conn = _get_conn()
+            with _cursor() as cur:
+                cur.execute("DELETE FROM paper_extractions")
+            conn.commit()
+            logger.info("RESET_ON_STARTUP=true, cleared documents, extractions and eval logs")
+        except Exception as exc:
+            logger.warning("Reset on startup failed: %s", exc)
 
+    logger.info(
+        "provider=%s chat=%s embeddings=%s (%d dims)",
+        settings.LLM_PROVIDER, settings.CHAT_MODEL, settings.EMBEDDING_MODEL, settings.VECTOR_DIMENSIONS,
+    )
     yield
 
 
-'''
-The _cors_middleware_kwargs function
-CORS (Cross-Origin Resource Sharing) is a browser security rule that blocks websites 
-from talking to your API unless you explicitly allow them. This function builds the permission rules:
-
-allow_origins — which websites can call your API (e.g. https://myapp.com)
-allow_methods: ["*"] — allow all HTTP methods (GET, POST, DELETE, etc.)
-allow_headers: ["*"] — allow all request headers
-allow_credentials — whether to allow cookies/auth headers. It's forced to False if 
-you allow all origins ("*"), because browsers won't allow both at the same time (it's a security rule in the CORS spec).
-'''
 def _cors_middleware_kwargs() -> dict:
     origins = settings.cors_origins_list
     kwargs: dict = {
@@ -75,18 +66,6 @@ def _cors_middleware_kwargs() -> dict:
     return kwargs
 
 
-'''
-The create_application function
-This is the factory that builds your app:
-
-Creates a FastAPI app with a title, docs pages (/docs, /redoc), and the lifespan hook
-Adds CORS middleware using the rules from above
-Registers routers — routers are groups of related API endpoints:
-
-health_router — probably a /health endpoint to check if the server is alive
-upload_router — handles file uploads
-api_router — the main API, mounted under /api (so all its routes start with /api/...)
-'''
 def create_application() -> FastAPI:
     application = FastAPI(
         title=settings.PROJECT_NAME,

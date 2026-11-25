@@ -8,7 +8,7 @@ The connection felt obvious. The problem I had was literally a retrieval problem
 
 That is DeepScholar. The rest of this post is how I built it and why each piece exists.
 
-![Landing page](docs/screenshots/landing.png)
+![Landing page](screenshots/landing.png)
 
 ## The rule everything else follows from
 
@@ -36,7 +36,7 @@ Fifth, and this is the part that I think actually matters, structured field extr
 
 This second extraction stage is what powers the compare view, the knowledge graph, and a lot of the retrieval intelligence later in the pipeline. Vector search tells you what is similar to a query. Schema extraction tells you what a paper actually is. They answer different questions and you need both.
 
-![Upload screen with extraction results](docs/screenshots/upload.png)
+![Upload screen with extraction results](screenshots/upload.png)
 
 ## Retrieval is where it gets interesting
 
@@ -72,7 +72,7 @@ Even with that prompt, models occasionally emit `[N]` markers in the prose that 
 
 A final defence in depth pass walks every sentence in the answer. If a sentence looks factual (length above a threshold, not a heading, not a transitional opener) but has no `[N]` marker, the sentence is stripped before the user ever sees it. Belt, braces, and a second belt.
 
-![Chat with citations](docs/screenshots/chat.png)
+![Chat with citations](screenshots/chat.png)
 
 ## The compare view came almost free
 
@@ -80,7 +80,7 @@ Once the per paper structured extractions exist, the comparison view is just a j
 
 This is one of those features that feels almost trivial in retrospect, but it only works because of a decision I made very early on, which was to spend the extra ingestion time pulling out structured metadata even though I had no immediate use for half of it.
 
-![Side by side compare](docs/screenshots/compare.png)
+![Side by side compare](screenshots/compare.png)
 
 ## Knowledge graph from the same data
 
@@ -88,7 +88,7 @@ The structured extractions also let me build a typed knowledge graph for free. N
 
 This was the feature I was most worried would feel like a gimmick, and it is the one I end up using most when I am exploring a new area. Seeing that three different papers all sit on the same dataset and improve on the same prior work tells you something about a sub field that you would not get from reading their abstracts back to back.
 
-![Knowledge graph](docs/screenshots/graph.png)
+![Knowledge graph](screenshots/graph.png)
 
 ## Measuring what is actually happening
 
@@ -102,7 +102,7 @@ A research tool that might be wrong is worse than no tool at all, because you wi
 
 The dashboard at `/analytics` shows the rolling averages, a 30 day daily trend, and a paginated log of every single query the system has ever answered. If a regression sneaks in (say I change a retrieval parameter), I see it on the trend line within a few queries.
 
-![Analytics dashboard](docs/screenshots/analytics.png)
+![Analytics dashboard](screenshots/analytics.png)
 
 ## The boring engineering choices that matter
 

@@ -1,4 +1,4 @@
-"""Embedding generation service using the OpenAI Embeddings API.
+"""Embedding generation through any OpenAI-compatible API (OpenAI or Ollama).
 
 Design notes
 ------------
@@ -6,9 +6,8 @@ Design notes
   module easy to swap out (e.g. for a local model) without touching callers.
 * Chunks are sent in batches so a document with many chunks only needs
   ceil(n / batch_size) API round-trips.
-* The OpenAI client is constructed lazily and cached; it is *not* imported at
-  module level so the rest of the application can start even when
-  OPENAI_API_KEY is not yet configured.
+* The client lives in ``ai_client.py`` and is created on first use, so the
+  app can start before a key or a local model is configured.
 * All metadata from the incoming Chunk TypedDict (chunk_id, start_index,
   end_index) is forwarded verbatim into the EmbeddedChunk metadata field.
 """
@@ -18,15 +17,8 @@ from __future__ import annotations
 from typing import Any, TypedDict
 
 from app.core.config import settings
+from app.services.ai_client import get_client
 from app.services.chunking import Chunk
-
-# Import openai at module level so Python's import-lock is only acquired once
-# on the main thread.  Lazy per-thread imports cause _ModuleLock deadlocks in
-# Python 3.14 when multiple threads call _get_client() simultaneously.
-try:
-    import openai as _openai_module
-except ModuleNotFoundError:
-    _openai_module = None  # type: ignore[assignment]
 
 
 '''
@@ -76,41 +68,30 @@ class EmbeddedChunk(TypedDict):
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-_client: Any = None  # openai.OpenAI — typed as Any to avoid hard import
-
-
-def _get_client() -> Any:
-    """Return a cached OpenAI client, creating it on first call."""
-    global _client
-    if _client is not None:
-        return _client
-
-    api_key = settings.OPENAI_API_KEY
-    if not api_key:
-        raise RuntimeError(
-            "OPENAI_API_KEY is not set. "
-            "Add it to your .env file or export it as an environment variable."
-        )
-
-    if _openai_module is None:
-        raise RuntimeError(
-            "The 'openai' package is not installed. Run: pip install openai>=1.30.0"
-        )
-
-    _client = _openai_module.OpenAI(api_key=api_key)
-    return _client
-
 
 def _embed_batch(texts: list[str]) -> list[list[float]]:
-    """Call the OpenAI embeddings endpoint for a single batch of texts."""
-    client = _get_client()
-    response = client.embeddings.create(
-        model=settings.OPENAI_EMBEDDING_MODEL,
-        input=texts,
-        encoding_format="float",
-    )
-    # The API guarantees results in the same order as input.
-    return [item.embedding for item in sorted(response.data, key=lambda x: x.index)]
+    """Call the embeddings endpoint (OpenAI or Ollama) for one batch of texts."""
+    client = get_client()
+    kwargs: dict[str, Any] = {
+        "model": settings.EMBEDDING_MODEL,
+        "input": texts,
+        "encoding_format": "float",
+    }
+    # text-embedding-3-* can shorten its output, which lets you pick a size
+    # pgvector can index (<= 2000 dims). Other models just return their size.
+    if settings.LLM_PROVIDER == "openai" and settings.EMBEDDING_MODEL.startswith("text-embedding-3"):
+        kwargs["dimensions"] = settings.VECTOR_DIMENSIONS
+
+    response = client.embeddings.create(**kwargs)
+    vectors = [item.embedding for item in sorted(response.data, key=lambda x: x.index)]
+
+    if vectors and len(vectors[0]) != settings.VECTOR_DIMENSIONS:
+        raise RuntimeError(
+            f"{settings.EMBEDDING_MODEL} returned {len(vectors[0])}-dim vectors but "
+            f"VECTOR_DIMENSIONS is {settings.VECTOR_DIMENSIONS}. Set VECTOR_DIMENSIONS="
+            f"{len(vectors[0])} in backend/.env (and recreate the documents table)."
+        )
+    return vectors
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +151,7 @@ def embed_chunks(chunks: list[Chunk]) -> list[EmbeddedChunk]:
     if not chunks:
         return []
 
-    batch_size = settings.OPENAI_EMBEDDING_BATCH_SIZE
+    batch_size = settings.EMBEDDING_BATCH_SIZE
     results: list[EmbeddedChunk] = []
 
     for batch_start in range(0, len(chunks), batch_size):
@@ -187,7 +168,7 @@ def embed_chunks(chunks: list[Chunk]) -> list[EmbeddedChunk]:
                         "chunk_id": chunk["chunk_id"],
                         "start_index": chunk["start_index"],
                         "end_index": chunk["end_index"],
-                        "model": settings.OPENAI_EMBEDDING_MODEL,
+                        "model": settings.EMBEDDING_MODEL,
                     },
                 )
             )

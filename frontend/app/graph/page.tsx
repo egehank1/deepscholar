@@ -1,8 +1,12 @@
 "use client";
 
+// react-force-graph-2d hands back loosely typed node/link objects (it mutates
+// them with x/y/vx/vy at runtime), so `any` is used deliberately in this file.
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 import dynamic from "next/dynamic";
 import { useEffect, useRef, useState, useCallback } from "react";
-import { fetchKnowledgeGraph, type GraphNode, type GraphEdge, type KnowledgeGraphData, type NodeType } from "@/lib/api";
+import { fetchKnowledgeGraph, type GraphNode, type KnowledgeGraphData, type NodeType } from "@/lib/api";
 
 // react-force-graph-2d uses browser-only APIs (canvas, requestAnimationFrame).
 // Dynamic import with ssr:false prevents hydration errors.

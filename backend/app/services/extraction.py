@@ -1,7 +1,7 @@
 """LLM-assisted structured extraction for academic papers.
 
 For each uploaded PDF this module extracts the following fields via a
-single GPT-4o-mini call with JSON mode:
+single chat-model call with JSON mode:
 
   title        – paper title
   authors      – ordered list of author names
@@ -13,8 +13,7 @@ single GPT-4o-mini call with JSON mode:
 
 Design notes
 ------------
-* The OpenAI client is shared with ``llm.py`` via a lazily-instantiated
-  module-level singleton (same pattern, separate instance to avoid coupling).
+* The client is shared with ``llm.py`` through ``ai_client.get_client``.
 * Only the first ``_TEXT_WINDOW`` characters of extracted text are sent to
   the LLM.  This covers the title, authors, abstract, and introduction (all
   near the top) while the tail window captures limitations / conclusion
@@ -32,12 +31,8 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.core.config import settings
+from app.services.ai_client import get_client
 
-# Import openai at module level — see embeddings.py for the full rationale.
-try:
-    import openai as _openai_module
-except ModuleNotFoundError:
-    _openai_module = None  # type: ignore[assignment]
 
 # ---------------------------------------------------------------------------
 # Schema
@@ -110,9 +105,6 @@ class PaperExtraction(BaseModel):
 # Internal state
 # ---------------------------------------------------------------------------
 
-_client: Any = None
-
-_MODEL = "gpt-4o-mini"
 
 # Characters taken from the start of the paper (covers title → introduction).
 _HEAD_CHARS = 10_000
@@ -162,26 +154,6 @@ Return a JSON object with exactly these keys:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _get_client() -> Any:
-    global _client
-    if _client is not None:
-        return _client
-
-    api_key = settings.OPENAI_API_KEY
-    if not api_key:
-        raise RuntimeError(
-            "OPENAI_API_KEY is not set. "
-            "Add it to your .env file or export it as an environment variable."
-        )
-
-    if _openai_module is None:
-        raise RuntimeError(
-            "The 'openai' package is not installed. Run: pip install openai>=1.30.0"
-        )
-
-    _client = _openai_module.OpenAI(api_key=api_key)
-    return _client
 
 
 def _build_text_window(full_text: str) -> str:
@@ -260,11 +232,11 @@ def extract_paper_fields(text: str) -> PaperExtraction:
     if not text.strip():
         return PaperExtraction()
 
-    client = _get_client()
+    client = get_client()
     window = _build_text_window(text)
 
     response = client.chat.completions.create(
-        model=_MODEL,
+        model=settings.CHAT_MODEL,
         response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": _SYSTEM_PROMPT},
