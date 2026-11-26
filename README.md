@@ -1,5 +1,15 @@
 # DeepScholar
 
+<p>
+  <a href="https://github.com/egehank1/deepscholar/actions/workflows/ci.yml"><img src="https://github.com/egehank1/deepscholar/actions/workflows/ci.yml/badge.svg" alt="ci" /></a>
+  <img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white" alt="Python 3.11+" />
+  <img src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white" alt="FastAPI" />
+  <img src="https://img.shields.io/badge/Next.js-14-000000?logo=nextdotjs&logoColor=white" alt="Next.js 14" />
+  <img src="https://img.shields.io/badge/pgvector-Postgres-336791?logo=postgresql&logoColor=white" alt="pgvector" />
+  <img src="https://img.shields.io/badge/runs%20locally-Ollama-black" alt="Runs locally with Ollama" />
+  <img src="https://img.shields.io/badge/License-MIT-blue" alt="MIT" />
+</p>
+
 Ask questions about a pile of research papers and get answers you can actually check. Every sentence points back to the passage it came from, and anything the model can't back up with a citation gets cut before you see it.
 
 Runs fully local with [Ollama](https://ollama.com) (no API key, your PDFs never leave your machine), or with OpenAI if you prefer.
